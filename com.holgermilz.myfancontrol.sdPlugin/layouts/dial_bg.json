@@ -1,0 +1,27 @@
+{
+  "id": "custom_bg_layout",
+  "items": [
+    {
+      "key": "full_display",
+      "type": "pixmap",
+      "rect": [0, 0, 200, 100],
+      "zOrder": 0
+    },
+    {
+      "key": "icon",
+      "type": "pixmap",
+      "rect": [10, 25, 45, 45],
+      "zOrder": 1
+    },
+    {
+      "key": "indicator",
+      "type": "bar",
+      "value": 0,
+      "rect": [0, 90, 200, 10],
+      "zOrder": 2,
+      "bar_bg_c": "#00000000",
+      "bar_border_c": "#00000000",
+      "bar_fill_c": "#00000000"
+    }
+  ]
+}

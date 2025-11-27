@@ -1,0 +1,51 @@
+{
+	"Name": "Mille´s MyFanControl",
+	"Version": "1.0.0.1",
+	"Author": "Holger Milz",
+	"URL": "https://github.com/DeinGitHubUser/DeinRepoName",
+	"Actions": [
+		{
+			"Name": "MyFanController",
+			"UUID": "com.holgermilz.myfancontrol.increment",
+			"Icon": "imgs/actions/counter/icon",
+			"Tooltip": "Controls a fan via FanControl",
+			"PropertyInspectorPath": "ui/fancontrol.html",
+			"Controllers": [
+				"Encoder"
+			],
+			"Encoder": {
+				"layout": "layouts/dial_bg.json",
+				"TriggerDescription": {
+					"Push": "Choose mode: \nAUTO/MAN/CUR",
+					"Rotate": "Fan Speed in %\nSelect curves"
+				}
+			},
+			"States": [
+				{
+					"Image": "imgs/actions/counter/key",
+					"TitleAlignment": "middle"
+				}
+			]
+		}
+	],
+	"Category": "Mille´s MyFanControl",
+	"CategoryIcon": "imgs/plugin/category-icon",
+	"CodePath": "bin/plugin.js",
+	"Description": "Control fan speeds and curves directly via Stream Deck dials using FanControl.",
+	"Icon": "imgs/plugin/marketplace",
+	"SDKVersion": 2,
+	"Software": {
+		"MinimumVersion": "6.5"
+	},
+	"OS": [
+		{
+			"Platform": "windows",
+			"MinimumVersion": "10"
+		}
+	],
+	"Nodejs": {
+		"Version": "20",
+		"Debug": "enabled"
+	},
+	"UUID": "com.holgermilz.myfancontrol"
+}

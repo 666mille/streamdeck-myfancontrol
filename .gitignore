@@ -1,0 +1,25 @@
+# Dependencies 
+node_modules/
+
+# Logs 
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS(Müll) 
+Thumbs.db
+Desktop.ini
+
+# Ignoriere den kompilierten Code (wird aus src neu gebaut)
+*.sdPlugin/bin/
+
+# Logs innerhalb des Plugins
+*.sdPlugin/logs/
+
+# Gehört in die "Releases" auf GitHub
+*.streamDeckPlugin
+
+# IDE Settings 
+.vscode/
