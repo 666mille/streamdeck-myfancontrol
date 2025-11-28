@@ -4,7 +4,7 @@ A Stream Deck+ plugin to control [FanControl](https://getfancontrol.com/) direct
 
 ## Features
 
-* **Mode Switching:** Toggle between `Auto`, `Manual` (Fixed %), and `Curve` (Software Control) by pressing the dial.
+* **Control Modes:** Switch between `Auto`, `Manual` (Fixed %), and `Curve` (Software Control) by pushing the dial.
 * **Precision Control:**
     * **Manual Mode:** Rotate to adjust fan speed (0-100%).
     * **Curve Mode:** Rotate to cycle through available fan curves defined in FanControl.
@@ -16,6 +16,8 @@ A Stream Deck+ plugin to control [FanControl](https://getfancontrol.com/) direct
 * Windows 10 or 11
 * Elgato Stream Deck+ (with dials)
 * [FanControl](https://getfancontrol.com/) (by Rem0o) installed and configured.
+    * **Recommendation:** Use the **portable version** of FanControl.
+    * **Important:** Place the folder in a simple location like `C:\FanControl` or `D:\Tools\FanControl`. **Avoid** placing it in `C:\Program Files` or `C:\Program Files (x86)`, as strict Windows permissions there can prevent the plugin or helper scripts from working correctly.
 
 ## Installation
 
@@ -32,7 +34,11 @@ A Stream Deck+ plugin to control [FanControl](https://getfancontrol.com/) direct
 
 ### ⚠️ Important: Setting up the UAC Bypass (Silent Restart)
 
-FanControl requires Administrator privileges. To allow the plugin to reload the configuration (apply changes) without a UAC prompt popping up every time you press the dial, you must set up a specific Windows Task.
+**Why is this necessary?**
+Every time you change a value (Speed, Mode, Curve) via the Stream Deck, the plugin updates the configuration file and **must restart FanControl** to apply the changes immediately.
+Without this bypass, Windows User Account Control (UAC) will trigger a popup ("Do you want to allow this app to make changes?") **every single time** you touch the dial.
+
+To enable a seamless, silent restart in the background, follow these steps:
 
 **If you enable "Bypass UAC prompt" in the plugin settings without these steps, the plugin will show an ERROR.**
 
@@ -77,9 +83,9 @@ FanControl requires Administrator privileges. To allow the plugin to reload the 
     * Rotate to choose: `AUTO`, `MAN` (Manual), or `CURVE`.
     * Push again to confirm and apply.
 * **Rotate Dial (Normal Mode):**
-    * **If Manual:** Increases/Decreases fan speed %.
-    * **If Curve:** Cycles through the list of curves defined in your JSON.
-    * **If Auto:** No action (read-only).
+    * **Manual:** Increases/Decreases fan speed %.
+    * **Curve:** Cycles through the list of curves defined in your JSON.
+    * **Auto:** **No action.** In Auto mode, the fan is controlled entirely by FanControl logic. Manual adjustments are disabled to prevent conflicts.
 
 ## Troubleshooting
 
