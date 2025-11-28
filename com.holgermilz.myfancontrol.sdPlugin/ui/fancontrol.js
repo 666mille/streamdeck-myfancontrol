@@ -313,7 +313,7 @@ client.sendToPropertyInspector.subscribe((ev) => {
     return;
   }
 
-  // ----- uacCheck: Check status of Task and VBS script -----
+  // ----- uacCheck: Check status of Task and VBS scripts -----
   if (cmd === "uacCheck") {
       const taskError = document.getElementById("taskError");
       const vbsError = document.getElementById("vbsError");
@@ -330,9 +330,18 @@ client.sendToPropertyInspector.subscribe((ev) => {
 
       // Update VBS Error visibility
       if (vbsError) {
-          if (payload.vbsExists === false) {
+          // Check both files
+          const vbs1 = payload.vbsExists; // silent_restart
+          const vbs2 = payload.adminVbsExists; // admin_action
+
+          if (vbs1 === false || vbs2 === false) {
               vbsError.style.display = "block";
               vbsError.style.color = "#ff6b6b"; 
+              
+              if (!vbs1 && !vbs2) vbsError.textContent = "Both VBS scripts missing in EXE folder!";
+              else if (!vbs2) vbsError.textContent = "File 'admin_action.vbs' missing!";
+              else vbsError.textContent = "File 'silent_restart.vbs' missing!";
+
           } else {
               vbsError.style.display = "none";
           }

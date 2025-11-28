@@ -21,13 +21,13 @@
     <sdpi-item label="Bypass UAC prompt">
         <sdpi-checkbox id="chkBypass" setting="bypassUac" label="Use silent restart (Task Scheduler)"></sdpi-checkbox>
         <p style="font-size: 10px; color: #999999; margin: 4px 0 0 0;">
-            Requires task "FanControlRestart" and "silent_restart.vbs" in FanControl folder.
+            Requires task "FanControlRestart" and scripts (silent_restart.vbs & admin_action.vbs).
         </p>
         <p id="taskError" style="font-size: 11px; margin: 4px 0 0 0; display: none;">
             Task "FanControlRestart" not found!
         </p>
         <p id="vbsError" style="font-size: 11px; margin: 4px 0 0 0; display: none;">
-            File "silent_restart.vbs" missing in EXE folder!
+            Helper scripts missing in FanControl folder!
         </p>
     </sdpi-item>
 

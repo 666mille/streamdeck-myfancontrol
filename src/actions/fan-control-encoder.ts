@@ -1,4 +1,3 @@
-// src/actions/fan-control-encoder.ts
 import streamDeck, {
   action,
   SingletonAction,
@@ -58,6 +57,7 @@ type PiMessage =
       command: "uacCheck";
       taskExists: boolean;
       vbsExists: boolean;
+      adminVbsExists: boolean; // NEU: Check für das zweite Skript
     };
 
 interface FanState {
@@ -77,7 +77,8 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
   
   // ERROR FLAGS
   private isTaskMissing = false;
-  private isVbsMissing = false;
+  private isVbsMissing = false;        // silent_restart.vbs
+  private isAdminVbsMissing = false;   // admin_action.vbs (NEU)
 
   // Debounce timers and pending values to prevent flooding the backend
   private pendingValueTimer: NodeJS.Timeout | null = null;
@@ -135,6 +136,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     // Reset error flags on appearance
     this.isTaskMissing = false; 
     this.isVbsMissing = false;
+    this.isAdminVbsMissing = false;
 
     this.lastFanNick = settings.fanNick;
     this.lastJsonPath = settings.jsonFile;
@@ -195,14 +197,15 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
         await this.performUacChecks(settings);
         this.sendUacStatusToPi();
 
-        if (this.isTaskMissing || this.isVbsMissing) {
+        if (this.isTaskMissing || this.isVbsMissing || this.isAdminVbsMissing) {
             ev.action.showAlert(); 
         }
     } else {
         this.isTaskMissing = false; 
         this.isVbsMissing = false;
+        this.isAdminVbsMissing = false;
         // Reset errors in Property Inspector
-        this.sendToPi({ command: "uacCheck", taskExists: true, vbsExists: true });
+        this.sendToPi({ command: "uacCheck", taskExists: true, vbsExists: true, adminVbsExists: true });
     }
 
     // 2. Handle path changes and restart logic
@@ -302,7 +305,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
         actionObj.setFeedback(payload);
     }
 
-    const hasError = this.isTaskMissing || this.isVbsMissing;
+    const hasError = this.isTaskMissing || this.isVbsMissing || this.isAdminVbsMissing;
 
     if (!this.modeSelectionActive && !hasError && updateSettingsIfChanged && settings.mode !== mode) {
       log.info(`Mode change detected in file: ${settings.mode} -> ${mode}`);
@@ -319,7 +322,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     const actionObj = ev.action;
     const settings = ev.payload.settings; 
     
-    if (this.isTaskMissing || this.isVbsMissing) {
+    if (this.isTaskMissing || this.isVbsMissing || this.isAdminVbsMissing) {
         actionObj.showAlert();
         return;
     }
@@ -385,7 +388,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
   }
 
   override onDialRotate(ev: DialRotateEvent<FanSettings>): void {
-    if (this.isTaskMissing || this.isVbsMissing) return;
+    if (this.isTaskMissing || this.isVbsMissing || this.isAdminVbsMissing) return;
 
     const actionObj = ev.action;
     const settings = ev.payload.settings;
@@ -603,17 +606,20 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
 
         if (errorType === "BOTH") {
             errorTitle = "Config Issues:";
-            // Use two separate text elements to ensure they are displayed one below the other
             mainTextElement = `
             <text x="${valueX}" y="65" font-family="sans-serif" font-size="${valueFontSize}" font-weight="bold" fill="${valueColor}" text-anchor="start">- Missing Task</text>
-            <text x="${valueX}" y="82" font-family="sans-serif" font-size="${valueFontSize}" font-weight="bold" fill="${valueColor}" text-anchor="start">- Missing VBS</text>
+            <text x="${valueX}" y="82" font-family="sans-serif" font-size="${valueFontSize}" font-weight="bold" fill="${valueColor}" text-anchor="start">- Missing Scripts</text>
             `;
         } 
         else {
             // Single error cases
             if (errorType === "FILE") {
-                errorTitle = "Missing VBS File:";
-                valueText = "silent_restart.vbs";
+                errorTitle = "Missing Script:";
+                // Logic moved to buildFeedbackPayload/here: We display specific file if possible
+                // valueText is passed in as the specific file name in buildFeedbackPayload
+                
+                // If valueText is generic, we try to detect specific file via class props (if available)
+                // However, since this is a pure function call, rely on valueText being correct.
             } else {
                 errorTitle = "Missing Task:";
                 valueText = "FanControlRestart";
@@ -649,13 +655,27 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
 
   private buildFeedbackPayload(title: string, mode: ControlMode, value: number, curveName: string = "") {
     let errorType: "NONE" | "TASK" | "FILE" | "BOTH" = "NONE";
+    let errorText = "";
 
-    if (this.isVbsMissing && this.isTaskMissing) errorType = "BOTH";
-    else if (this.isVbsMissing) errorType = "FILE";
+    // Check if any of the required files are missing
+    const anyFileMissing = this.isVbsMissing || this.isAdminVbsMissing;
+
+    if (anyFileMissing && this.isTaskMissing) errorType = "BOTH";
+    else if (anyFileMissing) {
+        errorType = "FILE";
+        // Determine specific error text
+        if (this.isVbsMissing && this.isAdminVbsMissing) {
+            errorText = "Both .vbs files";
+        } else if (this.isAdminVbsMissing) {
+            errorText = "admin_action.vbs";
+        } else {
+            errorText = "silent_restart.vbs";
+        }
+    }
     else if (this.isTaskMissing) errorType = "TASK";
 
     if (errorType !== "NONE") {
-        const image = this.generatePanelImage("ERROR", "", "ERR", false, false, errorType);
+        const image = this.generatePanelImage("ERROR", "", errorText, false, false, errorType);
         return {
             full_display: image,
             // If an error exists, send a transparent icon to hide the default fan image
@@ -875,7 +895,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
   // --- STARTUP LOGIC (UAC / Task Scheduler) ---
   
   /**
-   * Check if both the Windows Task and the VBS helper file exist.
+   * Check if both the Windows Task and BOTH VBS helper files exist.
    */
   private async performUacChecks(settings: FanSettings): Promise<void> {
       // 1. Task Check
@@ -886,13 +906,21 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
           this.isTaskMissing = true;
       }
 
-      // 2. VBS File Check
+      // 2. VBS File Checks
       if (settings.fanExe) {
           const exeDir = path.dirname(settings.fanExe);
+          
+          // Check silent_restart.vbs
           const vbsPath = path.join(exeDir, "silent_restart.vbs");
           this.isVbsMissing = !fs.existsSync(vbsPath);
+
+          // Check admin_action.vbs (NEU)
+          const adminVbsPath = path.join(exeDir, "admin_action.vbs");
+          this.isAdminVbsMissing = !fs.existsSync(adminVbsPath);
+
       } else {
-          this.isVbsMissing = true; // Cannot check without exe path -> Error
+          this.isVbsMissing = true; 
+          this.isAdminVbsMissing = true;
       }
   }
 
@@ -900,7 +928,8 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
       this.sendToPi({ 
           command: "uacCheck", 
           taskExists: !this.isTaskMissing, 
-          vbsExists: !this.isVbsMissing 
+          vbsExists: !this.isVbsMissing,
+          adminVbsExists: !this.isAdminVbsMissing // NEU
       });
   }
 
@@ -917,8 +946,10 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
 
     // A) Task Scheduler (via Checkbox)
     if (bypassUac) {
-        // Only run VBS if everything is correct. Fallback to Task if VBS is missing.
-        if (!this.isTaskMissing && !this.isVbsMissing) {
+        // Run VBS only if ALL checks passed
+        const safeToRun = !this.isTaskMissing && !this.isVbsMissing && !this.isAdminVbsMissing;
+
+        if (safeToRun) {
             this.triggerSilentRestart(exeDir);
         } else if (!this.isTaskMissing) {
             // Fallback: Trigger Task only (might show a popup, but better than failing)
