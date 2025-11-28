@@ -2,6 +2,8 @@
 
 A Stream Deck+ plugin to control [FanControl](https://getfancontrol.com/) directly via the dials (encoders). This plugin allows you to switch modes, adjust fan speeds, and select fan curves directly from your Stream Deck, interacting directly with FanControl's JSON configuration.
 
+![Stream Deck Demo](imgs/demo.gif)
+
 ## Features
 
 * **Control Modes:** Switch between `Auto`, `Manual` (Fixed %), and `Curve` (Software Control) by pushing the dial.
