@@ -1,14 +1,14 @@
 {
-	"Name": "Mille´s MyFanControl",
-	"Version": "1.0.1.0",
+	"Name": "FanControl Encoder",
+	"Version": "1.0.2.0",
 	"Author": "Holger Milz",
-	"URL": "https://github.com/DeinGitHubUser/DeinRepoName",
+	"URL": "https://github.com/HolgerMilz/streamdeck-fancontrol",
 	"Actions": [
 		{
-			"Name": "MyFanController",
+			"Name": "FanControl Dial",
 			"UUID": "com.holgermilz.myfancontrol.increment",
 			"Icon": "imgs/actions/counter/icon",
-			"Tooltip": "Controls a fan via FanControl",
+			"Tooltip": "Control fan speeds and curves",
 			"PropertyInspectorPath": "ui/fancontrol.html",
 			"Controllers": [
 				"Encoder"
@@ -16,8 +16,8 @@
 			"Encoder": {
 				"layout": "layouts/dial_bg.json",
 				"TriggerDescription": {
-					"Push": "Choose mode: \nAUTO/MAN/CUR",
-					"Rotate": "Fan Speed in %\nSelect curves"
+					"Push": "Change Mode",
+					"Rotate": "Speed / Curve"
 				}
 			},
 			"States": [
@@ -28,10 +28,10 @@
 			]
 		}
 	],
-	"Category": "Mille´s MyFanControl",
+	"Category": "FanControl",
 	"CategoryIcon": "imgs/plugin/category-icon",
 	"CodePath": "bin/plugin.js",
-	"Description": "Control fan speeds and curves directly via Stream Deck dials using FanControl.",
+	"Description": "Control fan speeds, switch modes (Auto/Manual/Curve), and select curves directly from your Stream Deck+ dials. Requires FanControl software.",
 	"Icon": "imgs/plugin/marketplace",
 	"SDKVersion": 2,
 	"Software": {
