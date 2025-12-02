@@ -1,6 +1,6 @@
 {
 	"Name": "FanControl Encoder",
-	"Version": "1.0.2.0",
+	"Version": "1.0.3.0",
 	"Author": "Holger Milz",
 	"URL": "https://github.com/HolgerMilz/streamdeck-fancontrol",
 	"Actions": [
@@ -28,7 +28,7 @@
 			]
 		}
 	],
-	"Category": "FanControl",
+	"Category": "FanControl Encoder",
 	"CategoryIcon": "imgs/plugin/category-icon",
 	"CodePath": "bin/plugin.js",
 	"Description": "Control fan speeds, switch modes (Auto/Manual/Curve), and select curves directly from your Stream Deck+ dials. Requires FanControl software.",
