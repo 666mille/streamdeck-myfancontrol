@@ -116,9 +116,14 @@ We need two scripts in your FanControl folder. One for the Stream Deck (User tri
 * **FanControl restarts but old values remain:**
     * Wait time might be too short. Try increasing `WScript.Sleep 500` to `2000` in `admin_action.vbs`.
 
-## Disclaimer
+## ⚠️ DISCLAIMER & WARNING
 
-This plugin is not affiliated with Elgato or the creator of FanControl. Use at your own risk.
+**USE AT YOUR OWN RISK.**
+
+* **Risk of Overheating:** Manually turning off fans (0%) or setting insufficient fan speeds can lead to severe **hardware overheating** and permanent damage to your components.
+* **No Warranty:** This plugin is **not** affiliated with Elgato, Corsair, or the developer of FanControl (Rem0o). The author of this plugin accepts **no liability** for any software issues, hardware damage, or data loss resulting from the use of this tool.
+* **Responsibility:** Always monitor your system temperatures when manually controlling fan curves. Ensure that critical cooling systems (CPU/GPU) have fail-safes enabled in your BIOS.
+License
 
 ## License
 
