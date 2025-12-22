@@ -944,6 +944,16 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
 
     const exeDir = path.dirname(exePath);
 
+    try {
+        const configFileName = path.basename(jsonPath); 
+        const trackerFile = path.join(exeDir, "active_config.txt");
+        
+        fs.writeFileSync(trackerFile, configFileName, "utf-8");
+        log.info(`Active config written to: ${trackerFile} -> ${configFileName}`);
+    } catch (e) {
+        log.error("Could not write active_config.txt", e);
+    }
+
     // A) Task Scheduler (via Checkbox)
     if (bypassUac) {
         // Run VBS only if ALL checks passed
