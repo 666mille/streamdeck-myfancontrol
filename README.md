@@ -11,7 +11,7 @@ A Stream Deck+ plugin to control [FanControl](https://getfancontrol.com/) direct
     * **Manual Mode:** Rotate to adjust fan speed (0-100%).
     * **Curve Mode:** Rotate to cycle through available fan curves defined in FanControl.
 * **Live Feedback:** Shows current fan name, mode, value/curve, and error states on the touch strip.
-* **Silent Reload (UAC Bypass):** Optional feature to reload the FanControl configuration without "Run as Administrator" prompts using Windows Task Scheduler.
+* **Seamless Profile Switching (UAC Bypass):** Optional feature to switch FanControl configurations instantly and silently using Windows Task Scheduler, preventing "ghost" icons in the tray.
 
 ## Prerequisites
 
@@ -59,14 +59,30 @@ We need two scripts in your FanControl folder. One for the Stream Deck (User tri
 
 3.  **Create Script B (`admin_action.vbs`):**
     * Create another text file, paste the code below, and save it as **`admin_action.vbs`**.
+    * *Note: This script now reads the requested configuration from a temporary file (`active_config.txt`) created by the plugin and switches the profile instantly without killing the app.*
+
     ```vbscript
     Set WshShell = CreateObject("WScript.Shell")
-    ' 1. Force kill FanControl (Running as Admin via Task)
-    WshShell.Run "taskkill /F /IM FanControl.exe", 0, True
-    ' 2. Wait 0.5 seconds for file handles to release
-    WScript.Sleep 500
-    ' 3. Restart FanControl
-    WshShell.Run "FanControl.exe -m", 0, False
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    ' Determine path to config text file (located in the same folder as this script)
+    strPath = WScript.ScriptFullName
+    strFolder = fso.GetParentFolderName(strPath)
+    strConfigFile = fso.BuildPath(strFolder, "active_config.txt")
+
+    ' Default config if file is not readable (Fallback)
+    configName = "userConfig.json"
+
+    ' Try to read the active config filename from the text file
+    If fso.FileExists(strConfigFile) Then
+        Set objFile = fso.OpenTextFile(strConfigFile, 1)
+        If Not objFile.AtEndOfStream Then
+            configName = objFile.ReadLine
+        End If
+        objFile.Close
+    End If
+
+    WshShell.Run "FanControl.exe -m -c " & Chr(34) & configName & Chr(34), 0, False
     ```
 
 #### Step 2: Create the Windows Task
