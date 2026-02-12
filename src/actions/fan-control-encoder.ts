@@ -741,8 +741,8 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     try {
       const contents = fs.readFileSync(jsonPath, "utf-8");
       const data = JSON.parse(contents) as any;
-      const controls = data?.Main?.Controls as any[];
-      const fanCurves = data?.Main?.FanCurves as any[];
+      const controls = data?.FanControl?.Controls as any[];
+      const fanCurves = data?.FanControl?.FanCurves as any[];
 
       let availableCurves: string[] = [];
       if (Array.isArray(fanCurves)) {
@@ -792,8 +792,8 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     try {
       const contents = fs.readFileSync(jsonPath, "utf-8");
       const data = JSON.parse(contents) as any;
-      const controls = data?.Main?.Controls as any[];
-      const fanCurves = data?.Main?.FanCurves as any[];
+      const controls = data?.FanControl?.Controls as any[];
+      const fanCurves = data?.FanControl?.FanCurves as any[];
 
       let availableCurves: string[] = [];
       if (Array.isArray(fanCurves)) {
@@ -849,7 +849,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     try {
       const contents = fs.readFileSync(jsonPath, "utf-8");
       const data = JSON.parse(contents) as any;
-      const controls = data?.Main?.Controls as any[];
+      const controls = data?.FanControl?.Controls as any[];
 
       if (!Array.isArray(controls)) return null;
       const ctrl = controls.find((c) => c.NickName === fanNick && !c.IsHidden);
@@ -877,7 +877,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     try {
       const contents = fs.readFileSync(jsonPath, "utf-8");
       const data = JSON.parse(contents) as any;
-      const controls = data?.Main?.Controls as any[];
+      const controls = data?.FanControl?.Controls as any[];
 
       if (!Array.isArray(controls)) return null;
       const ctrl = controls.find((c) => c.NickName === fanNick && !c.IsHidden);
@@ -1032,13 +1032,13 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     try {
       const contents = fs.readFileSync(jsonPath, "utf-8");
       const data = JSON.parse(contents) as any;
-      const controls = data?.Main?.Controls as any[];
+      const controls = data?.FanControl?.Controls as any[];
       let fans: string[] = [];
       if (Array.isArray(controls)) {
         fans = controls.filter((c) => c.NickName && !c.IsHidden).map((c) => String(c.NickName));
       }
       if (fans.length === 0) {
-         const sensors = data?.Main?.FanSensors as any[];
+         const sensors = data?.FanControl?.FanSensors as any[];
          if(Array.isArray(sensors)) {
              fans = sensors.filter(s => s.NickName).map((s) => String(s.NickName));
          }
