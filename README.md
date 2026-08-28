@@ -4,6 +4,11 @@ A Stream Deck+ plugin to control [FanControl](https://getfancontrol.com/) direct
 
 ![Stream Deck Demo](imgs/demo.gif)
 
+### Why is this not on the Elgato Marketplace?
+Due to recent changes in the Elgato Maker Agreement, developers are now required to accept comprehensive personal liability and indemnification clauses under Californian law. As an independent developer offering free, open-source hobby projects, I cannot accept these legal and financial risks.
+
+Therefore, this plugin—and all future updates to my existing plugins—will exclusively be published here on GitHub. You can always find the latest, safe-to-use `.streamDeckPlugin` files directly on the Releases page.
+
 ## Features
 
 * **Control Modes:** Switch between `Auto`, `Manual` (Fixed %), and `Curve` (Software Control) by pushing the dial.
