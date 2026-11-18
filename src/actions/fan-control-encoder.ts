@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, exec } from "node:child_process";
 import { promisify } from "node:util";
+import { isShuttingDown, onShutdown, lifeLog } from "../lifecycle.js";
 
 const execAsync = promisify(exec);
 
@@ -67,30 +68,88 @@ interface FanState {
     availableCurves: string[]; 
 }
 
-const log = streamDeck.logger.createScope("FanControlEncoder");
+// The SDK FileTarget uses fs.openSync without try/catch -> a log call can throw
+// (e.g. locked log file during shutdown). That's why every log call is wrapped here.
+const sdkLog = streamDeck.logger.createScope("FanControlEncoder");
+const log = {
+  info: (...a: unknown[]) => { try { (sdkLog.info as any)(...a); } catch { /* ignore */ } },
+  warn: (...a: unknown[]) => { try { (sdkLog.warn as any)(...a); } catch { /* ignore */ } },
+  error: (...a: unknown[]) => { try { (sdkLog.error as any)(...a); } catch { /* ignore */ } },
+};
+
+/** Writes JSON atomically (temp file + rename) so a power-off/shutdown never leaves a half-written file. */
+function writeJsonSafe(file: string, data: unknown): void {
+  const text = JSON.stringify(data, null, 2);
+  const tmp = `${file}.sdtmp`;
+  try {
+    fs.writeFileSync(tmp, text, "utf-8");
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    // Fallback (e.g. FanControl is holding the file open without FILE_SHARE_DELETE)
+    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+    fs.writeFileSync(file, text, "utf-8");
+  }
+}
+
+/** Escapes text for use inside SVG (fan/curve names may contain & or <). */
+function xml(text: string): string {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * State of ONE dial (per action instance / context).
+ * Previously these were single fields shared by all dials: with two dials,
+ * one dial's mode selection or pending value affected the other.
+ */
+interface DialState {
+  modeSelectionActive: boolean;
+  pendingMode: ControlMode;
+  selectModeTimer: NodeJS.Timeout | null;
+
+  // Debounce: collect rotation, write JSON once after 1.2 s
+  pendingValueTimer: NodeJS.Timeout | null;
+  pendingValue: number | null;
+  pendingCurveIndex: number | null;
+  pendingJsonPath: string | null;
+  pendingFanNick: string | null;
+  pendingFanExe: string | null;
+  pendingBypassUac: boolean;
+  pendingAction: any;
+
+  // For detecting a changed config file in the Property Inspector
+  lastJsonPath: string | undefined;
+}
+
+function newDialState(): DialState {
+  return {
+    modeSelectionActive: false,
+    pendingMode: "AUTO",
+    selectModeTimer: null,
+    pendingValueTimer: null,
+    pendingValue: null,
+    pendingCurveIndex: null,
+    pendingJsonPath: null,
+    pendingFanNick: null,
+    pendingFanExe: null,
+    pendingBypassUac: false,
+    pendingAction: null,
+    lastJsonPath: undefined,
+  };
+}
 
 @action({ UUID: "com.holgermilz.myfancontrol.increment" })
 export class FanControlEncoder extends SingletonAction<FanSettings> {
-  // --- STATE VARIABLES ---
-  private modeSelectionActive = false;
-  private pendingMode: ControlMode = "AUTO";
-  
-  // ERROR FLAGS
+  // --- STATE PER DIAL (key = action context id) ---
+  private dials = new Map<string, DialState>();
+
+  // ERROR FLAGS (system-wide: scheduled task / scripts exist or not)
   private isTaskMissing = false;
   private isVbsMissing = false;        // silent_restart.vbs
   private isAdminVbsMissing = false;   // admin_action.vbs (NEU)
-
-  // Debounce timers and pending values to prevent flooding the backend
-  private pendingValueTimer: NodeJS.Timeout | null = null;
-  private pendingValue: number | null = null; 
-  private pendingCurveIndex: number | null = null; 
-  private pendingJsonPath: string | null = null;
-  private pendingFanNick: string | null = null;
-  private pendingFanExe: string | null = null;
-  private pendingBypassUac: boolean = false;
-  
-  // Timeout for mode selection
-  private selectModeTimeoutTimer: NodeJS.Timeout | null = null; 
 
   // Polling interval management
   private activeIntervals = new Map<string, NodeJS.Timeout>();
@@ -98,28 +157,70 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
   // Global settings storage
   private currentSettings = new Map<string, FanSettings>();
 
-  private lastFanNick: string | undefined;
-  private lastJsonPath: string | undefined;
+  // Cache: re-read the JSON only when it actually changed (mtime/size)
+  private jsonCache = new Map<string, { mtimeMs: number; size: number; data: any | null }>();
+
+  constructor() {
+    super();
+    onShutdown(() => this.dispose());
+  }
+
+  /** Stops all timers and discards pending writes (called on shutdown). */
+  private dispose(): void {
+    for (const st of this.dials.values()) {
+      if (st.selectModeTimer) clearTimeout(st.selectModeTimer);
+      if (st.pendingValueTimer) clearTimeout(st.pendingValueTimer);
+      st.selectModeTimer = null;
+      st.pendingValueTimer = null;
+    }
+    for (const t of this.activeIntervals.values()) clearInterval(t);
+    this.activeIntervals.clear();
+    lifeLog("FanControlEncoder: timers stopped");
+  }
+
+  /** State of one dial; created on first access. */
+  private dial(contextId: string): DialState {
+    let st = this.dials.get(contextId);
+    if (!st) {
+      st = newDialState();
+      this.dials.set(contextId, st);
+    }
+    return st;
+  }
+
+  /** SDK calls return promises; without a catch they become unhandledRejection. */
+  private safe(p: unknown, what: string): void {
+    if (p && typeof (p as any).catch === "function") {
+      (p as Promise<unknown>).catch((err) => {
+        if (!isShuttingDown()) log.warn(`${what} failed`, err);
+      });
+    }
+  }
 
   // ---------- TIMEOUT HELPERS ----------
   
-  private clearSelectModeTimeout(): void {
-      if (this.selectModeTimeoutTimer) {
-          clearTimeout(this.selectModeTimeoutTimer);
-          this.selectModeTimeoutTimer = null;
+  private clearSelectModeTimeout(st: DialState): void {
+      if (st.selectModeTimer) {
+          clearTimeout(st.selectModeTimer);
+          st.selectModeTimer = null;
       }
   }
 
   private startSelectModeTimeout(actionObj: any, context: string): void {
-      this.clearSelectModeTimeout();
+      const st = this.dial(context);
+      this.clearSelectModeTimeout(st);
       
-      this.selectModeTimeoutTimer = setTimeout(() => {
+      st.selectModeTimer = setTimeout(() => {
+          st.selectModeTimer = null;
+          if (isShuttingDown()) return;
           log.info('Select mode timeout reached, reverting.');
-          this.modeSelectionActive = false; 
+          st.modeSelectionActive = false; 
           
           const settings = this.currentSettings.get(context);
           if (settings) {
-              this.updateDisplayFromState(actionObj, settings, false);
+              try {
+                  this.updateDisplayFromState(actionObj, settings, false);
+              } catch (err) { log.error("select mode timeout error", err); }
           }
       }, 3000); 
   }
@@ -130,22 +231,24 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     const settings = (ev.payload.settings ?? {}) as FanSettings;
     this.currentSettings.set(ev.action.id, settings);
 
-    this.modeSelectionActive = false;
-    this.clearPendingValue();
+    const st = this.dial(ev.action.id);
+    st.modeSelectionActive = false;
+    this.clearSelectModeTimeout(st);
     
     // Reset error flags on appearance
     this.isTaskMissing = false; 
     this.isVbsMissing = false;
     this.isAdminVbsMissing = false;
 
-    this.lastFanNick = settings.fanNick;
-    this.lastJsonPath = settings.jsonFile;
+    st.lastJsonPath = settings.jsonFile;
 
     // Perform initial UAC/File checks asynchronously
     if (settings.bypassUac) {
-        this.performUacChecks(settings).then(() => {
-            this.updateDisplayFromState(ev.action, settings, false);
-        });
+        this.performUacChecks(settings)
+            .then(() => {
+                if (!isShuttingDown()) this.updateDisplayFromState(ev.action, settings, false);
+            })
+            .catch((err) => log.error("performUacChecks failed", err));
     }
 
     this.updateDisplayFromState(ev.action, settings, true);
@@ -158,8 +261,26 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
   }
 
   override onWillDisappear(ev: WillDisappearEvent<FanSettings>): void {
-    this.stopPolling(ev.action.id);
-    this.currentSettings.delete(ev.action.id);
+    const id = ev.action.id;
+    this.stopPolling(id);
+
+    const st = this.dials.get(id);
+    if (st) {
+      this.clearSelectModeTimeout(st);
+      // Dial leaves the page (page switch/profile switch) while a value is pending:
+      // write it now instead of discarding it.
+      if (st.pendingValueTimer) {
+        clearTimeout(st.pendingValueTimer);
+        st.pendingValueTimer = null;
+        try {
+          this.executePendingWrite(st);
+        } catch (err) {
+          log.error("executePendingWrite (willDisappear) error", err);
+        }
+      }
+      this.dials.delete(id);
+    }
+    this.currentSettings.delete(id);
   }
 
   override async onPropertyInspectorDidAppear(
@@ -186,11 +307,24 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
   override async onDidReceiveSettings(
     ev: DidReceiveSettingsEvent<FanSettings>,
   ): Promise<void> {
+    try {
+      await this.handleDidReceiveSettings(ev);
+    } catch (err) {
+      log.error("onDidReceiveSettings error", err);
+    }
+  }
+
+  private async handleDidReceiveSettings(
+    ev: DidReceiveSettingsEvent<FanSettings>,
+  ): Promise<void> {
+    if (isShuttingDown()) return;
     const settings = (ev.payload.settings ?? {}) as FanSettings;
     this.currentSettings.set(ev.action.id, settings);
-    
-    this.modeSelectionActive = false;
-    this.clearPendingValue();
+
+    const st = this.dial(ev.action.id);
+    st.modeSelectionActive = false;
+    this.clearSelectModeTimeout(st);
+    this.clearPendingValue(st);
 
     // 1. Perform UAC and File checks
     if (settings.bypassUac === true) {
@@ -198,7 +332,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
         this.sendUacStatusToPi();
 
         if (this.isTaskMissing || this.isVbsMissing || this.isAdminVbsMissing) {
-            ev.action.showAlert(); 
+            this.safe(ev.action.showAlert(), "showAlert"); 
         }
     } else {
         this.isTaskMissing = false; 
@@ -209,17 +343,13 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     }
 
     // 2. Handle path changes and restart logic
-    if (settings.jsonFile && settings.jsonFile !== this.lastJsonPath) {
-        log.info(`Config file changed: ${this.lastJsonPath} -> ${settings.jsonFile}`);
-        this.lastJsonPath = settings.jsonFile;
+    if (settings.jsonFile && settings.jsonFile !== st.lastJsonPath) {
+        log.info(`Config file changed: ${st.lastJsonPath} -> ${settings.jsonFile}`);
+        st.lastJsonPath = settings.jsonFile;
         
         if (settings.fanExe) {
             this.launchFanControlConfig(settings.fanExe, settings.jsonFile, !!settings.bypassUac, ev.action);
         }
-    }
-
-    if (settings.fanNick !== this.lastFanNick) {
-        this.lastFanNick = settings.fanNick;
     }
 
     this.startPolling(ev.action);
@@ -240,10 +370,12 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     if (this.activeIntervals.has(contextId)) return;
 
     const timer = setInterval(() => {
-      // Pause polling if user is currently interacting (to prevent values jumping around)
-      if (this.modeSelectionActive) return;
-      if (this.pendingValue !== null) return;      
-      if (this.pendingCurveIndex !== null) return; 
+      if (isShuttingDown()) return;
+      // Pause polling if user is currently interacting with THIS dial (to prevent values jumping around)
+      const st = this.dial(contextId);
+      if (st.modeSelectionActive) return;
+      if (st.pendingValue !== null) return;      
+      if (st.pendingCurveIndex !== null) return; 
 
       const currentSettings = this.currentSettings.get(contextId);
       if (!currentSettings || !currentSettings.jsonFile || !currentSettings.fanNick) return;
@@ -291,27 +423,28 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
 
     const { mode, value, curveName } = state;
     
+    const st = this.dial(actionObj.id);
     let displayTitle = this.buildTitle(settings.fanNick);
     
-    if (this.modeSelectionActive) {
+    if (st.modeSelectionActive) {
         displayTitle = "SELECT MODE";
     }
 
-    actionObj.setTitle(displayTitle);
+    this.safe(actionObj.setTitle(displayTitle), "setTitle");
 
-    const payload = this.buildFeedbackPayload(displayTitle, mode, value, curveName);
+    const payload = this.buildFeedbackPayload(st, displayTitle, mode, value, curveName);
     
     if (typeof actionObj.setFeedback === 'function') {
-        actionObj.setFeedback(payload);
+        this.safe(actionObj.setFeedback(payload), "setFeedback");
     }
 
     const hasError = this.isTaskMissing || this.isVbsMissing || this.isAdminVbsMissing;
 
-    if (!this.modeSelectionActive && !hasError && updateSettingsIfChanged && settings.mode !== mode) {
+    if (!st.modeSelectionActive && !hasError && updateSettingsIfChanged && settings.mode !== mode) {
       log.info(`Mode change detected in file: ${settings.mode} -> ${mode}`);
       
       const newSettings = { ...settings, mode };
-      actionObj.setSettings(newSettings);
+      this.safe(actionObj.setSettings(newSettings), "setSettings");
       this.currentSettings.set(actionObj.id, newSettings);
     }
   }
@@ -319,34 +452,36 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
   // ---------- DIAL EVENTS ----------
 
   override onDialDown(ev: DialDownEvent<FanSettings>): void {
+    if (isShuttingDown()) return;
     const actionObj = ev.action;
     const settings = ev.payload.settings; 
+    const st = this.dial(actionObj.id);
     
     if (this.isTaskMissing || this.isVbsMissing || this.isAdminVbsMissing) {
-        actionObj.showAlert();
+        this.safe(actionObj.showAlert(), "showAlert");
         return;
     }
 
     // A) Confirm selection (if mode selection is active)
-    if (this.modeSelectionActive) {
-      this.clearSelectModeTimeout(); 
+    if (st.modeSelectionActive) {
+      this.clearSelectModeTimeout(st); 
 
-      const targetMode = this.pendingMode;
+      const targetMode = st.pendingMode;
       const currentMode: ControlMode = settings.mode ?? "AUTO";
 
       // Validation for Software/Curve mode
       if (targetMode === "SOFT") {
           const state = this.readFanStateFromJson(settings.jsonFile, settings.fanNick);
           if (!state || state.availableCurves.length === 0) {
-              this.modeSelectionActive = false;
-              actionObj.showAlert();
+              st.modeSelectionActive = false;
+              this.safe(actionObj.showAlert(), "showAlert");
               this.updateDisplayFromState(actionObj, settings, false);
               return;
           }
       }
 
       if (targetMode === currentMode || !settings.jsonFile || !settings.fanNick) {
-        this.modeSelectionActive = false;
+        st.modeSelectionActive = false;
         this.updateDisplayFromState(actionObj, settings, false);
         return;
       }
@@ -354,8 +489,8 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
       const result = this.setFanModeInJson(settings.jsonFile, settings.fanNick, targetMode);
 
       if (!result) {
-        this.modeSelectionActive = false;
-        actionObj.showAlert(); 
+        st.modeSelectionActive = false;
+        this.safe(actionObj.showAlert(), "showAlert"); 
         this.updateDisplayFromState(actionObj, settings, false);
         return;
       }
@@ -363,10 +498,10 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
       const newMode = result.mode;
       const newSettings = { ...settings, mode: newMode };
       
-      actionObj.setSettings(newSettings);
+      this.safe(actionObj.setSettings(newSettings), "setSettings");
       this.currentSettings.set(actionObj.id, newSettings);
 
-      this.modeSelectionActive = false; 
+      st.modeSelectionActive = false; 
       
       const exePath = settings.fanExe;
       const jsonPath = settings.jsonFile;
@@ -379,26 +514,33 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     }
 
     // B) Start mode selection
-    this.modeSelectionActive = true;
-    this.pendingMode = settings.mode ?? "AUTO";
+    // A rotation that is still pending is written first, otherwise it would be lost.
+    if (st.pendingValueTimer) {
+        clearTimeout(st.pendingValueTimer);
+        st.pendingValueTimer = null;
+        this.executePendingWrite(st);
+    }
+    st.modeSelectionActive = true;
+    st.pendingMode = settings.mode ?? "AUTO";
     
     this.startSelectModeTimeout(actionObj, actionObj.id); 
     this.updateDisplayFromState(actionObj, settings, false);
-    this.clearPendingValue();
   }
 
   override onDialRotate(ev: DialRotateEvent<FanSettings>): void {
+    if (isShuttingDown()) return;
     if (this.isTaskMissing || this.isVbsMissing || this.isAdminVbsMissing) return;
 
     const actionObj = ev.action;
     const settings = ev.payload.settings;
     const ticks = ev.payload.ticks ?? 0;
+    const st = this.dial(actionObj.id);
 
     if (ticks === 0) return;
 
     // A) Cycle through modes
-    if (this.modeSelectionActive) {
-      this.cyclePendingMode(ticks);
+    if (st.modeSelectionActive) {
+      this.cyclePendingMode(st, ticks);
       this.startSelectModeTimeout(actionObj, actionObj.id); 
       this.updateDisplayFromState(actionObj, settings, false);
       return;
@@ -418,8 +560,8 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     // MAN
     if (currentState.mode === "MAN") {
         let baseValue: number;
-        if (this.pendingValue !== null) {
-            baseValue = this.pendingValue;
+        if (st.pendingValue !== null) {
+            baseValue = st.pendingValue;
         } else {
             baseValue = currentState.value;
         }
@@ -428,22 +570,22 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
         if (newValue < 0) newValue = 0;
         if (newValue > 100) newValue = 100;
 
-        this.pendingValue = newValue;
-        this.pendingJsonPath = settings.jsonFile;
-        this.pendingFanNick = settings.fanNick;
-        this.pendingFanExe = settings.fanExe ?? null;
-        this.pendingBypassUac = !!settings.bypassUac;
-        this.pendingCurveIndex = null; 
+        st.pendingValue = newValue;
+        st.pendingJsonPath = settings.jsonFile;
+        st.pendingFanNick = settings.fanNick;
+        st.pendingFanExe = settings.fanExe ?? null;
+        st.pendingBypassUac = !!settings.bypassUac;
+        st.pendingCurveIndex = null; 
 
         const displayTitle = this.buildTitle(settings.fanNick);
-        actionObj.setTitle(displayTitle);
+        this.safe(actionObj.setTitle(displayTitle), "setTitle");
         
-        const feedback = this.buildFeedbackPayload(displayTitle, "MAN", newValue, "");
+        const feedback = this.buildFeedbackPayload(st, displayTitle, "MAN", newValue, "");
         if (typeof (actionObj as any).setFeedback === 'function') {
-            (actionObj as any).setFeedback(feedback);
+            this.safe((actionObj as any).setFeedback(feedback), "setFeedback");
         }
         
-        this.triggerDebounceWrite(actionObj);
+        this.triggerDebounceWrite(st, actionObj);
         return;
     }
 
@@ -453,8 +595,8 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
         if (curves.length === 0) return;
 
         let currentIndex = curves.indexOf(currentState.curveName);
-        if (this.pendingCurveIndex !== null) {
-            currentIndex = this.pendingCurveIndex;
+        if (st.pendingCurveIndex !== null) {
+            currentIndex = st.pendingCurveIndex;
         }
         if (currentIndex === -1) currentIndex = 0;
 
@@ -462,31 +604,31 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
         if (newIndex < 0) newIndex = curves.length - 1;
         if (newIndex >= curves.length) newIndex = 0;
 
-        this.pendingCurveIndex = newIndex;
-        this.pendingJsonPath = settings.jsonFile;
-        this.pendingFanNick = settings.fanNick;
-        this.pendingFanExe = settings.fanExe ?? null;
-        this.pendingBypassUac = !!settings.bypassUac;
-        this.pendingValue = null;
+        st.pendingCurveIndex = newIndex;
+        st.pendingJsonPath = settings.jsonFile;
+        st.pendingFanNick = settings.fanNick;
+        st.pendingFanExe = settings.fanExe ?? null;
+        st.pendingBypassUac = !!settings.bypassUac;
+        st.pendingValue = null;
 
         const newCurveName = curves[newIndex];
         const displayTitle = this.buildTitle(settings.fanNick);
-        actionObj.setTitle(displayTitle);
+        this.safe(actionObj.setTitle(displayTitle), "setTitle");
 
-        const feedback = this.buildFeedbackPayload(displayTitle, "SOFT", 0, newCurveName);
+        const feedback = this.buildFeedbackPayload(st, displayTitle, "SOFT", 0, newCurveName);
         if (typeof (actionObj as any).setFeedback === 'function') {
-            (actionObj as any).setFeedback(feedback);
+            this.safe((actionObj as any).setFeedback(feedback), "setFeedback");
         }
 
-        this.triggerDebounceWrite(actionObj);
+        this.triggerDebounceWrite(st, actionObj);
         return;
     }
   }
 
   // --- Helper: Cycle through available modes ---
-  private cyclePendingMode(ticks: number) {
+  private cyclePendingMode(st: DialState, ticks: number) {
       const modes: ControlMode[] = ["AUTO", "MAN", "SOFT"];
-      let idx = modes.indexOf(this.pendingMode);
+      let idx = modes.indexOf(st.pendingMode);
       if (idx === -1) idx = 0;
       
       if (ticks > 0) {
@@ -496,39 +638,50 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
           idx--;
           if (idx < 0) idx = modes.length - 1;
       }
-      this.pendingMode = modes[idx];
+      st.pendingMode = modes[idx];
   }
 
   // --- Helper: Debounce write operations ---
-  private triggerDebounceWrite(actionObj?: any) {
-      if (this.pendingValueTimer) clearTimeout(this.pendingValueTimer);
+  private triggerDebounceWrite(st: DialState, actionObj?: any) {
+      if (st.pendingValueTimer) clearTimeout(st.pendingValueTimer);
+      st.pendingAction = actionObj ?? null;
 
-      this.pendingValueTimer = setTimeout(() => {
-          this.executePendingWrite(actionObj);
+      st.pendingValueTimer = setTimeout(() => {
+          st.pendingValueTimer = null;
+          try {
+              this.executePendingWrite(st);
+          } catch (err) {
+              log.error("executePendingWrite error", err);
+          }
       }, 1200);
   }
 
-  private executePendingWrite(actionObj?: any) {
-      this.pendingValueTimer = null;
-      const jsonPath = this.pendingJsonPath;
-      const fanNick = this.pendingFanNick;
-      const exePath = this.pendingFanExe;
-      const bypassUac = this.pendingBypassUac;
+  private executePendingWrite(st: DialState) {
+      // No more file writes / FanControl restarts while Windows is shutting down
+      if (isShuttingDown()) return;
+      const jsonPath = st.pendingJsonPath;
+      const fanNick = st.pendingFanNick;
+      const exePath = st.pendingFanExe;
+      const bypassUac = st.pendingBypassUac;
+      const actionObj = st.pendingAction;
 
-      if (!jsonPath || !fanNick) return;
+      if (!jsonPath || !fanNick) {
+          this.clearPendingValue(st);
+          return;
+      }
 
-      if (this.pendingValue !== null) {
-          const result = this.setManualValueInJson(jsonPath, fanNick, this.pendingValue);
-          this.pendingValue = null;
+      if (st.pendingValue !== null) {
+          const result = this.setManualValueInJson(jsonPath, fanNick, st.pendingValue);
+          st.pendingValue = null;
           
           if (result) {
              this.launchFanControlConfig(exePath ?? undefined, jsonPath, bypassUac, actionObj);
           }
       }
-      else if (this.pendingCurveIndex !== null) {
+      else if (st.pendingCurveIndex !== null) {
           const state = this.readFanStateFromJson(jsonPath, fanNick);
           if (state && state.availableCurves.length > 0) {
-              let idx = this.pendingCurveIndex;
+              let idx = st.pendingCurveIndex;
               if (idx >= state.availableCurves.length) idx = 0;
               
               const curveName = state.availableCurves[idx];
@@ -538,8 +691,9 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
                   this.launchFanControlConfig(exePath ?? undefined, jsonPath, bypassUac, actionObj);
               }
           }
-          this.pendingCurveIndex = null;
+          st.pendingCurveIndex = null;
       }
+      this.clearPendingValue(st);
   }
 
   // ---------- VISUAL HELPERS (SVG) ----------
@@ -581,7 +735,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     } else {
         titleSvg = `
         <text x="5" y="20" font-family="sans-serif" font-size="15" font-weight="600" fill="${titleColor}" text-anchor="start">
-            ${displayFanName} (<tspan fill="${modeLabelColor}">${modeLabel}</tspan>)
+            ${xml(displayFanName)} (<tspan fill="${modeLabelColor}">${xml(modeLabel)}</tspan>)
         </text>`;
     }
 
@@ -624,13 +778,13 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
                 errorTitle = "Missing Task:";
                 valueText = "FanControlRestart";
             }
-            mainTextElement = `<text x="${valueX}" y="${valueY}" font-family="sans-serif" font-size="${valueFontSize}" font-weight="bold" fill="${valueColor}" text-anchor="start">${valueText}</text>`;
+            mainTextElement = `<text x="${valueX}" y="${valueY}" font-family="sans-serif" font-size="${valueFontSize}" font-weight="bold" fill="${valueColor}" text-anchor="start">${xml(valueText)}</text>`;
         }
 
         extraLabelSvg = `<text x="5" y="45" font-family="sans-serif" font-size="12" font-weight="normal" fill="${WHITE_COLOR}" text-anchor="start">${errorTitle}</text>`;
     } else {
         // Standard case (no error)
-        mainTextElement = `<text x="${valueX}" y="${valueY}" font-family="sans-serif" font-size="${valueFontSize}" font-weight="bold" fill="${valueColor}" text-anchor="start">${valueText}</text>`;
+        mainTextElement = `<text x="${valueX}" y="${valueY}" font-family="sans-serif" font-size="${valueFontSize}" font-weight="bold" fill="${valueColor}" text-anchor="start">${xml(valueText)}</text>`;
     }
 
     const svg = `
@@ -653,7 +807,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
   }
 
-  private buildFeedbackPayload(title: string, mode: ControlMode, value: number, curveName: string = "") {
+  private buildFeedbackPayload(st: DialState, title: string, mode: ControlMode, value: number, curveName: string = "") {
     let errorType: "NONE" | "TASK" | "FILE" | "BOTH" = "NONE";
     let errorText = "";
 
@@ -702,16 +856,16 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     let modeLabel: string = mode; 
     if (mode === "SOFT") modeLabel = "CURVE"; 
 
-    if (this.modeSelectionActive) {
-       if (this.pendingMode === "MAN") displayValue = "MANUAL";
-       else if (this.pendingMode === "AUTO") displayValue = "AUTO";
-       else if (this.pendingMode === "SOFT") displayValue = "CURVE"; 
+    if (st.modeSelectionActive) {
+       if (st.pendingMode === "MAN") displayValue = "MANUAL";
+       else if (st.pendingMode === "AUTO") displayValue = "AUTO";
+       else if (st.pendingMode === "SOFT") displayValue = "CURVE"; 
        
        title = "SELECT MODE";
     }
 
     const isManual = (mode === "MAN");
-    const image = this.generatePanelImage(title, modeLabel, displayValue, this.modeSelectionActive, isManual, "NONE");
+    const image = this.generatePanelImage(title, modeLabel, displayValue, st.modeSelectionActive, isManual, "NONE");
 
     return {
         full_display: image, 
@@ -736,11 +890,10 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     fanNick: string | undefined,
   ): FanState | null {
     if (!jsonPath || !fanNick) return null;
-    if (!fs.existsSync(jsonPath)) return null;
 
     try {
-      const contents = fs.readFileSync(jsonPath, "utf-8");
-      const data = JSON.parse(contents) as any;
+      const data = this.readJsonCached(jsonPath);
+      if (!data) return null;
       const controls = data?.FanControl?.Controls as any[];
       const fanCurves = data?.FanControl?.FanCurves as any[];
 
@@ -780,6 +933,37 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
       log.error("Read JSON error", err);
       return null;
     }
+  }
+
+  /**
+   * Reads the FanControl JSON only when mtime/size changed.
+   * FanControl rewrites its config when it exits (i.e. at shutdown too) – a
+   * half-written file is remembered as "invalid" exactly once instead of being
+   * logged with a stack trace every 2 s.
+   */
+  private readJsonCached(jsonPath: string): any | null {
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(jsonPath);
+    } catch {
+      this.jsonCache.delete(jsonPath);
+      return null;
+    }
+
+    const cached = this.jsonCache.get(jsonPath);
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+      return cached.data;
+    }
+
+    let data: any | null = null;
+    try {
+      data = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
+    } catch (err) {
+      if (!isShuttingDown()) log.warn(`JSON not readable (maybe being written): ${jsonPath}`, (err as any)?.message ?? err);
+      data = null;
+    }
+    this.jsonCache.set(jsonPath, { mtimeMs: st.mtimeMs, size: st.size, data });
+    return data;
   }
 
   private setFanModeInJson(
@@ -829,7 +1013,8 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
       let currentCurve = "None";
       if (ctrl.SelectedFanCurve?.Name) currentCurve = ctrl.SelectedFanCurve.Name;
 
-      fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf-8");
+      writeJsonSafe(jsonPath, data);
+      this.jsonCache.delete(jsonPath);
       
       return { mode: targetMode, value, curveName: currentCurve, availableCurves };
 
@@ -862,9 +1047,13 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
       if (v < 0) v = 0; if (v > 100) v = 100;
       ctrl.ManualControlValue = v;
 
-      fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf-8");
+      writeJsonSafe(jsonPath, data);
+      this.jsonCache.delete(jsonPath);
       return { mode: "MAN", value: v, curveName: "", availableCurves: [] };
-    } catch (err) { return null; }
+    } catch (err) {
+      log.error("JSON write error", err);
+      return null;
+    }
   }
 
   private setSoftwareCurveInJson(
@@ -887,9 +1076,13 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
       ctrl.ManualControl = false;
       ctrl.SelectedFanCurve = { "Name": curveName };
 
-      fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf-8");
+      writeJsonSafe(jsonPath, data);
+      this.jsonCache.delete(jsonPath);
       return { mode: "SOFT", value: 0, curveName: curveName, availableCurves: [] };
-    } catch (err) { return null; }
+    } catch (err) {
+      log.error("JSON write error", err);
+      return null;
+    }
   }
 
   // --- STARTUP LOGIC (UAC / Task Scheduler) ---
@@ -898,9 +1091,10 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
    * Check if both the Windows Task and BOTH VBS helper files exist.
    */
   private async performUacChecks(settings: FanSettings): Promise<void> {
+      if (isShuttingDown()) return;
       // 1. Task Check
       try {
-          await execAsync('schtasks /query /tn "FanControlRestart" /fo CSV /nh');
+          await execAsync('schtasks /query /tn "FanControlRestart" /fo CSV /nh', { windowsHide: true, timeout: 5000 });
           this.isTaskMissing = false;
       } catch (e) {
           this.isTaskMissing = true;
@@ -939,8 +1133,13 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     bypassUac: boolean,
     actionObj?: any
   ): void {
+    // Starting processes during Windows shutdown fails (0xC0000142 dialogs)
+    if (isShuttingDown()) {
+        log.info("Shutdown in progress – FanControl restart skipped");
+        return;
+    }
     if (!exePath || !fs.existsSync(exePath)) return;
-    if (!jsonPath) return; 
+    if (!jsonPath) return;
 
     const exeDir = path.dirname(exePath);
 
@@ -973,7 +1172,7 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     try {
       const command = `"${exePath}" -c "${jsonPath}"`;
       const child = spawn(command, {
-        shell: true, cwd: exeDir, detached: true, windowsHide: true,
+        shell: true, cwd: exeDir, detached: true, windowsHide: true, stdio: "ignore",
       });
       child.on("error", (err) => log.error("Launch error", err));
       child.unref();
@@ -982,28 +1181,44 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
 
   private triggerTaskSchedulerRestart(): void {
     log.info("Triggering Task 'FanControlRestart'...");
-    const child = spawn('schtasks', ['/run', '/tn', 'FanControlRestart'], {
-        detached: true, windowsHide: true
-    });
-    child.unref();
+    try {
+        const child = spawn('schtasks', ['/run', '/tn', 'FanControlRestart'], {
+            detached: true, windowsHide: true, stdio: "ignore"
+        });
+        // Without an 'error' listener a failed spawn throws an uncaught exception!
+        child.on("error", (err) => log.error("schtasks launch error", err));
+        child.unref();
+    } catch (err) { log.error("schtasks spawn exception", err); }
   }
 
   private triggerSilentRestart(cwd: string): void {
       log.info("Triggering silent_restart.vbs...");
       // wscript "path/to/silent_restart.vbs"
       // Since we set cwd, the filename is sufficient
-      const child = spawn('wscript', ['silent_restart.vbs'], {
-          cwd, 
-          detached: true, 
-          windowsHide: true
-      });
-      child.on('error', (err) => { log.error("VBS launch error", err); });
-      child.unref();
+      try {
+          const child = spawn('wscript', ['silent_restart.vbs'], {
+              cwd,
+              detached: true,
+              windowsHide: true,
+              stdio: "ignore"
+          });
+          child.on('error', (err) => { log.error("VBS launch error", err); });
+          child.unref();
+      } catch (err) { log.error("VBS spawn exception", err); }
   }
 
   // ---------- COMMUNICATION & HELPERS ----------
 
   private validateExe(exePath: string): void {
+    try {
+      this.validateExeUnsafe(exePath);
+    } catch (err) {
+      log.error("validateExe error", err);
+      this.sendToPi({ command: "exeResult", error: "config_folder_missing" });
+    }
+  }
+
+  private validateExeUnsafe(exePath: string): void {
     if (path.basename(exePath).toLowerCase() !== "fancontrol.exe") {
       this.sendToPi({ command: "exeResult", error: "wrong_exe" });
       return;
@@ -1057,20 +1272,21 @@ export class FanControlEncoder extends SingletonAction<FanSettings> {
     try {
       const ui = streamDeck.ui.current as any;
       if (ui && typeof ui.sendToPropertyInspector === "function") {
-        ui.sendToPropertyInspector(message);
+        this.safe(ui.sendToPropertyInspector(message), "sendToPropertyInspector");
       }
     } catch (err) { log.error("Error sending to PI", err); }
   }
 
-  private clearPendingValue(): void {
-    if (this.pendingValueTimer) {
-      clearTimeout(this.pendingValueTimer);
-      this.pendingValueTimer = null;
+  private clearPendingValue(st: DialState): void {
+    if (st.pendingValueTimer) {
+      clearTimeout(st.pendingValueTimer);
+      st.pendingValueTimer = null;
     }
-    this.pendingValue = null;
-    this.pendingJsonPath = null;
-    this.pendingFanNick = null;
-    this.pendingFanExe = null;
-    this.pendingCurveIndex = null;
+    st.pendingValue = null;
+    st.pendingJsonPath = null;
+    st.pendingFanNick = null;
+    st.pendingFanExe = null;
+    st.pendingCurveIndex = null;
+    st.pendingAction = null;
   }
 }

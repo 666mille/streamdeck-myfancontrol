@@ -1,6 +1,6 @@
 {
 	"Name": "FanControl Encoder",
-	"Version": "1.0.5.0",
+	"Version": "1.0.6.0",
 	"Author": "Holger Milz",
 	"URL": "https://github.com/HolgerMilz/streamdeck-fancontrol",
 	"Actions": [
@@ -44,8 +44,7 @@
 		}
 	],
 	"Nodejs": {
-		"Version": "20",
-		"Debug": "enabled"
+		"Version": "20"
 	},
 	"UUID": "com.holgermilz.myfancontrol"
 }

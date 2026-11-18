@@ -1,6 +1,6 @@
 {
     "name": "com.holgermilz.myfancontrol",
-    "version": "1.0.5.0",
+    "version": "1.0.6.0",
     "author": "Holger Milz",
     "license": "MIT",
     "scripts": {
@@ -21,6 +21,7 @@
         "typescript": "^5.2.2"
     },
     "dependencies": {
-        "@elgato/streamdeck": "^1.4.0"
+        "@elgato/streamdeck": "^1.4.0",
+        "ws": "^8.18.3"
     }
 }

@@ -136,6 +136,9 @@ We need two scripts in your FanControl folder. One for the Stream Deck (User tri
     * Check Step 2: Did you point the Action to `admin_action.vbs`?
 * **FanControl restarts but old values remain:**
     * Wait time might be too short. Try increasing `WScript.Sleep 500` to `2000` in `admin_action.vbs`.
+* **Checking whether the plugin shut down cleanly:**
+    * Since v1.0.6 the plugin writes start and shutdown events with its process ID to `logs\lifecycle.log` inside the plugin folder (`%APPDATA%\Elgato\StreamDeck\Plugins\com.holgermilz.myfancontrol.sdPlugin`).
+    * A clean session ends with `Shutdown: ...`, `Cleanup done` and `exit, code 0`. If the last line is `Start ...` or `exit ... without orderly shutdown!`, the plugin did not shut down cleanly.
 
 ## ⚠️ DISCLAIMER & WARNING
 
