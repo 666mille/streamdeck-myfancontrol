@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Sensor Display Settings</title>
+    <script src="sdpi-components.js"></script>
+    <style>
+      .hint { font-size: 10px; color: #999; margin: 4px 0 0 0; }
+      .heading { font-size: 12px; font-weight: bold; color: #ddd; margin: 14px 0 4px 8px; }
+      #status { font-size: 11px; color: #ccc; margin: 4px 0 0 0; white-space: pre-line; }
+    </style>
+  </head>
+  <body>
+    <sdpi-item label="Status">
+      <p id="status">Waiting for plugin...</p>
+      <p class="hint">Reads FanControl directly. FanControl must be running (app or service).</p>
+    </sdpi-item>
+
+    <div class="heading">Display</div>
+    <sdpi-item id="elementItem" label="Sensor">
+      <sdpi-select setting="element"></sdpi-select>
+    </sdpi-item>
+    <sdpi-item label="Show header">
+      <sdpi-checkbox setting="showHeader" default="true" label="Show text in top-left corner"></sdpi-checkbox>
+    </sdpi-item>
+    <sdpi-item label="Header text">
+      <sdpi-textfield setting="headerText" placeholder="(name from FanControl)"></sdpi-textfield>
+    </sdpi-item>
+    <sdpi-item id="unitItem" label="Unit">
+      <sdpi-select setting="unit" default="C">
+        <option value="C">°C</option>
+        <option value="F">°F</option>
+      </sdpi-select>
+      <p class="hint">Pressing the key also toggles °C / °F. Thresholds are converted automatically.</p>
+    </sdpi-item>
+    <sdpi-item id="decimalsItem" label="Decimals">
+      <sdpi-select setting="decimals" default="0">
+        <option value="0">0</option>
+        <option value="1">1</option>
+      </sdpi-select>
+    </sdpi-item>
+    <sdpi-item id="barItem" label="Level bar">
+      <sdpi-checkbox setting="showBar" default="true" label="Show bar"></sdpi-checkbox>
+    </sdpi-item>
+
+    <div class="heading">Colors</div>
+    <sdpi-item label="Color applies to">
+      <sdpi-select setting="colorMode" default="value">
+        <option value="value">Value and bar</option>
+        <option value="background">Background</option>
+      </sdpi-select>
+    </sdpi-item>
+    <sdpi-item label="Normal">
+      <sdpi-color setting="color1" default="#27AE60"></sdpi-color>
+    </sdpi-item>
+    <sdpi-item id="level2Item" label="Level 2 from">
+      <sdpi-textfield setting="level2" placeholder="off"></sdpi-textfield>
+    </sdpi-item>
+    <sdpi-item label="Level 2 color">
+      <sdpi-color setting="color2" default="#F1C40F"></sdpi-color>
+    </sdpi-item>
+    <sdpi-item id="level3Item" label="Level 3 from">
+      <sdpi-textfield setting="level3" placeholder="off"></sdpi-textfield>
+    </sdpi-item>
+    <sdpi-item label="Level 3 color">
+      <sdpi-color setting="color3" default="#C0392B"></sdpi-color>
+      <p class="hint">Empty threshold = level off.</p>
+    </sdpi-item>
+    <sdpi-item label="Background">
+      <sdpi-color setting="background" default="#1A1A1A"></sdpi-color>
+    </sdpi-item>
+    <sdpi-item label="Offline color">
+      <sdpi-color setting="offlineColor" default="#808080"></sdpi-color>
+    </sdpi-item>
+
+    <script src="sensor.js"></script>
+  </body>
+</html>

@@ -1,6 +1,6 @@
 {
     "name": "com.holgermilz.myfancontrol",
-    "version": "1.0.6.0",
+    "version": "1.1.0.0",
     "author": "Holger Milz",
     "license": "MIT",
     "scripts": {
@@ -15,7 +15,7 @@
         "@rollup/plugin-terser": "^0.4.4",
         "@rollup/plugin-typescript": "^12.1.0",
         "@tsconfig/node20": "^20.1.2",
-        "@types/node": "~20.15.0",
+        "@types/node": "~20.19.0",
         "rollup": "^4.0.2",
         "tslib": "^2.6.2",
         "typescript": "^5.2.2"

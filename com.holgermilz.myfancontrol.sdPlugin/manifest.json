@@ -1,8 +1,8 @@
 {
 	"Name": "FanControl Encoder",
-	"Version": "1.0.6.0",
+	"Version": "1.1.0.0",
 	"Author": "Holger Milz",
-	"URL": "https://github.com/HolgerMilz/streamdeck-fancontrol",
+	"URL": "https://github.com/666mille/streamdeck-myfancontrol",
 	"Actions": [
 		{
 			"Name": "FanControl Dial",
@@ -26,12 +26,60 @@
 					"TitleAlignment": "middle"
 				}
 			]
+		},
+		{
+			"Name": "Temperature Display",
+			"UUID": "com.holgermilz.myfancontrol.temperature",
+			"Icon": "imgs/actions/temperature/icon",
+			"Tooltip": "Shows a FanControl temperature sensor (press to toggle °C/°F)",
+			"PropertyInspectorPath": "ui/sensor.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/temperature/key",
+					"ShowTitle": false
+				}
+			]
+		},
+		{
+			"Name": "Fan Speed Display",
+			"UUID": "com.holgermilz.myfancontrol.fanspeed",
+			"Icon": "imgs/actions/fanspeed/icon",
+			"Tooltip": "Shows the current output (%) of a FanControl fan control",
+			"PropertyInspectorPath": "ui/sensor.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/fanspeed/key",
+					"ShowTitle": false
+				}
+			]
+		},
+		{
+			"Name": "Fan RPM Display",
+			"UUID": "com.holgermilz.myfancontrol.fanrpm",
+			"Icon": "imgs/actions/fanspeed/icon",
+			"Tooltip": "Shows the current speed (RPM) of a fan sensor",
+			"PropertyInspectorPath": "ui/sensor.html",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/actions/fanspeed/key",
+					"ShowTitle": false
+				}
+			]
 		}
 	],
 	"Category": "FanControl Encoder",
 	"CategoryIcon": "imgs/plugin/category-icon",
 	"CodePath": "bin/plugin.js",
-	"Description": "Control fan speeds, switch modes (Auto/Manual/Curve), and select curves directly from your Stream Deck+ dials. Requires FanControl software.",
+	"Description": "Show live FanControl temperatures, fan output (%) and fan speed (RPM) on any Stream Deck key, and control fan modes, speeds and curves with the Stream Deck+ dials. Requires FanControl.",
 	"Icon": "imgs/plugin/marketplace",
 	"SDKVersion": 2,
 	"Software": {

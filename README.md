@@ -1,6 +1,9 @@
 # FanControl Encoder for Stream Deck
 
-A Stream Deck+ plugin to control [FanControl](https://getfancontrol.com/) directly via the dials (encoders). This plugin allows you to switch modes, adjust fan speeds, and select fan curves directly from your Stream Deck, interacting directly with FanControl's JSON configuration.
+A Stream Deck plugin for [FanControl](https://getfancontrol.com/):
+
+* **Dial (Stream Deck+):** switch modes, adjust fan speeds and select fan curves directly with the dials (encoders), interacting directly with FanControl's JSON configuration.
+* **Display keys (any Stream Deck):** show live temperatures, fan output (%) and fan speed (RPM) on regular keys.
 
 ![Stream Deck Demo](imgs/demo.gif)
 
@@ -16,12 +19,15 @@ Therefore, this plugin—and all future updates to my existing plugins—will ex
     * **Manual Mode:** Rotate to adjust fan speed (0-100%).
     * **Curve Mode:** Rotate to cycle through available fan curves defined in FanControl.
 * **Live Feedback:** Shows current fan name, mode, value/curve, and error states on the touch strip.
+* **Live Display Keys (new in v1.1):** Show a temperature (°C/°F), a fan's output (%) or its speed (RPM) on a regular key, with configurable color levels. No extra setup needed.
 * **Seamless Profile Switching (UAC Bypass):** Optional feature to switch FanControl configurations instantly and silently using Windows Task Scheduler, preventing "ghost" icons in the tray.
 
 ## Prerequisites
 
 * Windows 10 or 11
-* Elgato Stream Deck+ (with dials)
+* An Elgato Stream Deck:
+    * **Display keys** (Temperature, Fan Speed, Fan RPM): any model with keys (Stream Deck, MK.2, XL, Mini, Neo, Stream Deck+, Mobile).
+    * **FanControl Dial**: Stream Deck+ (dials) only.
 * [FanControl](https://getfancontrol.com/) (by Rem0o) installed and configured.
     * **Recommendation:** Use the **portable version** of FanControl.
     * **Important:** Place the folder in a simple location like `C:\FanControl` or `D:\Tools\FanControl`. **Avoid** placing it in `C:\Program Files` or `C:\Program Files (x86)`, as strict Windows permissions there can prevent the plugin or helper scripts from working correctly.
@@ -30,9 +36,12 @@ Therefore, this plugin—and all future updates to my existing plugins—will ex
 
 1.  Download the latest `.streamDeckPlugin` release.
 2.  Double-click the file to install it to your Stream Deck software.
-3.  Drag the **FanControl Encoder** action to a dial stack on your Stream Deck+.
+3.  **Display keys:** drag *Temperature Display*, *Fan Speed Display* or *Fan RPM Display* onto any key and select the sensor. No further setup is needed.
+4.  **Dial (Stream Deck+):** drag the **FanControl Dial** action to a dial stack and follow the configuration below.
 
-## Configuration
+## Configuration (Dial)
+
+The settings below (EXE path, JSON configuration, UAC bypass) are only needed for the dial. The display keys find FanControl on their own.
 
 ### Basic Setup
 1.  **Path to FanControl EXE:** Select your `FanControl.exe`.
@@ -124,6 +133,32 @@ We need two scripts in your FanControl folder. One for the Stream Deck (User tri
     * **Manual:** Increases/Decreases fan speed %.
     * **Curve:** Cycles through the list of curves defined in your JSON.
     * **Auto:** **No action.** In Auto mode, the fan is controlled entirely by FanControl logic. Manual adjustments are disabled to prevent conflicts.
+
+## Temperature & Fan Display Keys
+
+Three key actions show live values directly from FanControl:
+
+* **Temperature Display:** any temperature sensor known to FanControl (hardware or custom) in °C or °F. Pressing the key toggles the unit.
+* **Fan Speed Display:** the current output (%) of a fan control.
+* **Fan RPM Display:** the current speed (RPM) of a fan sensor.
+
+No extra FanControl plugin and no setup are required. The values are read through FanControl's own local interface
+(the named pipe FanControl uses between its app and its service), so FanControl just has to be running, either as app or as service.
+Sensor names are taken from the nicknames in your active FanControl configuration.
+
+> This interface is internal to FanControl and not officially documented. It was verified against FanControl V286; a future FanControl update could change it. The dial action is not affected by this.
+
+### Color levels
+Each key has three color levels: *Normal*, *Level 2 from* and *Level 3 from*. Thresholds use the displayed unit (°C/°F, % or RPM); leave a field empty to disable that level.
+When the temperature unit is switched, the thresholds are converted automatically. Colors can be applied to the value and bar or to the whole key background.
+
+### Key states
+| Display | Meaning |
+| --- | --- |
+| `OFFLINE` | FanControl is not running |
+| `WAIT` | FanControl is running but has not initialized its sensors yet |
+| `NOT FOUND` | The selected sensor does not exist (anymore) |
+| `--` | FanControl currently reports no value for this sensor |
 
 ## Troubleshooting
 
